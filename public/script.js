@@ -8,6 +8,7 @@ const statusElement = document.getElementById('status');
 
 let localStream; // To store the local video/audio stream
 let peerConnection; // To handle WebRTC peer-to-peer connection
+let iceCandidates = []; // Store candidates before the remote description is set
 
 const servers = {
     iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
@@ -32,6 +33,7 @@ const init = async () => {
 // Create a WebRTC peer connection
 const createPeerConnection = () => {
     peerConnection = new RTCPeerConnection(servers);
+
     localStream.getTracks().forEach((track) => {
         peerConnection.addTrack(track, localStream);
     });
@@ -42,7 +44,7 @@ const createPeerConnection = () => {
 
     peerConnection.onicecandidate = (event) => {
         if (event.candidate) {
-            socket.emit('candidate', event.candidate);
+            socket.emit('candidate', event.candidate); // Send candidate to the server
         }
     };
 };
@@ -63,39 +65,33 @@ const hangUp = () => {
     hangUpButton.disabled = true;
     startCallButton.disabled = false;
     resetButton.disabled = false;
-    
+
     socket.emit('hangUp'); // Notify the other user
 };
 
 // Reset: Reinitialize the media and clear the remote video
 const reset = async () => {
-    // Stop local media streams
     if (localStream) {
         localStream.getTracks().forEach((track) => track.stop());
         localStream = null;
     }
 
-    // Reset video elements
     localVideo.srcObject = null;
     remoteVideo.srcObject = null;
 
-    // Close and nullify the peerConnection
     if (peerConnection) {
         peerConnection.close();
         peerConnection = null;
     }
 
-    // Unsubscribe from signaling events
     socket.off('offer');
     socket.off('answer');
     socket.off('candidate');
     socket.off('hangUp');
 
-    // Reinitialize media
     await init();
     setStatus('Click "Start Call" to begin.');
 
-    // Reset button states
     resetButton.disabled = true;
     startCallButton.disabled = false;
     hangUpButton.disabled = true;
@@ -117,11 +113,21 @@ socket.on('offer', async (offer) => {
 
 // Handle receiving an answer
 socket.on('answer', (answer) => {
-    // Ensure we set remote description before adding candidate
-    if (peerConnection && answer) {
+    if (peerConnection) {
         peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
         setStatus('Connected! You can now chat.');
     }
+
+    // Forward stored ICE candidates once the remote description is set
+    if (iceCandidates.length > 0) {
+        iceCandidates.forEach((candidate) => {
+            peerConnection.addIceCandidate(new RTCIceCandidate(candidate)).catch((err) => {
+                console.warn('Failed to add buffered ICE candidate:', err);
+            });
+        });
+        iceCandidates = []; // Clear candidates after they are added
+    }
+
     hangUpButton.disabled = false;
     startCallButton.disabled = true;
 });
@@ -129,15 +135,15 @@ socket.on('answer', (answer) => {
 // Handle receiving an ICE candidate
 socket.on('candidate', (candidate) => {
     if (peerConnection) {
-        // Only add candidate if the remote description is set
+        // Add candidate only if remote description is set
         if (peerConnection.remoteDescription) {
             peerConnection.addIceCandidate(new RTCIceCandidate(candidate)).catch((err) => {
                 console.warn('Failed to add ICE candidate:', err);
             });
         } else {
-            // Store the candidate to add later if remote description isn't set yet
+            // Store the candidate until remote description is set
             console.log('ICE candidate received before remote description, saving...');
-            peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+            iceCandidates.push(candidate);
         }
     } else {
         console.warn('Received ICE candidate, but peerConnection is null.');
@@ -146,7 +152,7 @@ socket.on('candidate', (candidate) => {
 
 // Handle receiving a "hangUp" message
 socket.on('hangUp', () => {
-    hangUp(); // Execute hang up logic when the other user disconnects
+    hangUp();
     setStatus('Partner disconnected. Reset to start again.');
 });
 
@@ -159,7 +165,6 @@ startCallButton.addEventListener('click', async () => {
 
     socket.emit('offer', offer);
 
-    // Reattach event listeners
     socket.on('answer', (answer) => {
         peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
     });
@@ -167,6 +172,8 @@ startCallButton.addEventListener('click', async () => {
     socket.on('candidate', (candidate) => {
         if (peerConnection) {
             peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+        } else {
+            iceCandidates.push(candidate); // Store candidate if remote description is not yet set
         }
     });
 
