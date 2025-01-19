@@ -27,6 +27,10 @@ io.on('connection', (socket) => {
     socket.on('disconnect', () => {
         console.log('A user disconnected:', socket.id);
     });
+
+    socket.on('hangUp', () => {
+        socket.broadcast.emit('hangUp');
+    });
 });
 
 server.listen(3000, () => {
