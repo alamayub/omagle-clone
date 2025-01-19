@@ -6,9 +6,10 @@ const hangUpButton = document.getElementById('hangUp');
 const resetButton = document.getElementById('reset');
 const statusElement = document.getElementById('status');
 
-let localStream; // To store the local video/audio stream
-let peerConnection; // To handle WebRTC peer-to-peer connection
-let iceCandidates = []; // Buffer to hold ICE candidates before remote description is set
+let localStream; // Local video/audio stream
+let peerConnection; // WebRTC connection
+let partnerId = null; // ID of the connected partner
+let iceCandidates = []; // ICE candidate buffer
 
 const servers = {
     iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
@@ -18,11 +19,11 @@ const setStatus = (message) => {
     statusElement.textContent = message;
 };
 
-// Initialize local media (camera and microphone)
+// Initialize local media
 const init = async () => {
     try {
         localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-        localVideo.srcObject = localStream; // Show the local video
+        localVideo.srcObject = localStream; // Display local video
         setStatus('Ready to start a call.');
     } catch (error) {
         console.error('Error accessing media devices:', error);
@@ -30,65 +31,67 @@ const init = async () => {
     }
 };
 
-// Create a WebRTC peer connection
+// Create a new WebRTC peer connection
 const createPeerConnection = () => {
     peerConnection = new RTCPeerConnection(servers);
 
-    // Add local tracks to the connection
     if (localStream) {
         localStream.getTracks().forEach((track) => {
             peerConnection.addTrack(track, localStream);
         });
     }
 
-    // Set up remote video stream once tracks arrive
     peerConnection.ontrack = (event) => {
         remoteVideo.srcObject = event.streams[0];
     };
 
-    // Handle ICE candidates and notify the server
     peerConnection.onicecandidate = (event) => {
-        if (event.candidate) {
-            socket.emit('candidate', event.candidate);
+        if (event.candidate && partnerId) {
+            socket.emit('candidate', event.candidate, partnerId);
         }
     };
 };
 
-
-// Reset the call, stop streams, and clear remote video
+// Reset the app state
 const reset = async () => {
     if (localStream) {
         localStream.getTracks().forEach(track => track.stop());
         localStream = null;
     }
 
-    localVideo.srcObject = null;
-    remoteVideo.srcObject = null;
-
     if (peerConnection) {
         peerConnection.close();
         peerConnection = null;
     }
 
-    // Reset buttons and status
-    resetButton.disabled = true;
+    localVideo.srcObject = null;
+    remoteVideo.srcObject = null;
+
+    partnerId = null;
+
     startCallButton.disabled = false;
     hangUpButton.disabled = true;
+    resetButton.disabled = true;
 
-    // Reinitialize the media
     await init();
     setStatus('Click "Start Call" to begin.');
 };
+
+// Handle incoming events
+socket.on('partnerFound', (id) => {
+    partnerId = id;
+    setStatus('Partner found! Starting connection...');
+});
 
 // Handle receiving an offer
 socket.on('offer', async (offer) => {
     createPeerConnection();
     await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
-    
-    const answer = await peerConnection.createAnswer(); // Generate an answer
+
+    const answer = await peerConnection.createAnswer();
     await peerConnection.setLocalDescription(answer);
 
-    socket.emit('answer', answer); // Send the answer to the other peer
+    socket.emit('answer', answer, partnerId);
     setStatus('Partner found! Connecting...');
 });
 
@@ -97,11 +100,10 @@ socket.on('answer', async (answer) => {
     await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
     setStatus('Connected! You can now chat.');
 
-    // Add buffered ICE candidates if any
     iceCandidates.forEach((candidate) => {
         peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
     });
-    iceCandidates = []; // Clear the buffer once candidates are applied
+    iceCandidates = [];
 });
 
 // Handle receiving an ICE candidate
@@ -110,12 +112,12 @@ socket.on('candidate', (candidate) => {
         if (peerConnection.remoteDescription) {
             peerConnection.addIceCandidate(new RTCIceCandidate(candidate)).catch(console.warn);
         } else {
-            // Store ICE candidates until remote description is set
             iceCandidates.push(candidate);
         }
     }
 });
 
+// Handle hang-up signal
 socket.on('hangUp', async () => {
     if (peerConnection) {
         peerConnection.close();
@@ -123,61 +125,56 @@ socket.on('hangUp', async () => {
     }
 
     remoteVideo.srcObject = null;
+    setStatus('Partner disconnected. Ready for a new call.');
 
-    // Reinitialize local media for the next call
-    await init();
-
-    setStatus('Partner hung up. Ready for a new call.');
-
+    partnerId = null;
     startCallButton.disabled = false;
     hangUpButton.disabled = true;
     resetButton.disabled = false;
+
+    await init();
 });
 
-
-// Handle the "Start Call" button
+// Start call
 startCallButton.addEventListener('click', async () => {
-    createPeerConnection(); // Create a new peer connection
+    createPeerConnection();
 
-    const offer = await peerConnection.createOffer(); // Create a new offer
-    await peerConnection.setLocalDescription(offer); // Set the offer locally
+    const offer = await peerConnection.createOffer();
+    await peerConnection.setLocalDescription(offer);
 
-    socket.emit('offer', offer); // Send the offer to the server
-
+    socket.emit('offer', offer, partnerId);
     setStatus('Looking for a partner...');
+
     startCallButton.disabled = true;
     hangUpButton.disabled = false;
     resetButton.disabled = true;
 });
 
-// Handle the "Hang Up" button
+// Hang up call
 hangUpButton.addEventListener('click', () => {
     if (peerConnection) {
-        peerConnection.ontrack = null;
-        peerConnection.onicecandidate = null;
-        peerConnection.close(); // Close the peer connection
-        peerConnection = null; // Nullify for reuse
+        peerConnection.close();
+        peerConnection = null;
     }
 
     if (localStream) {
-        localStream.getTracks().forEach(track => track.stop()); // Stop media tracks
+        localStream.getTracks().forEach(track => track.stop());
+        localStream = null;
     }
 
-    remoteVideo.srcObject = null;
+    socket.emit('hangUp', partnerId);
+    partnerId = null;
 
+    remoteVideo.srcObject = null;
     setStatus('Call ended. Ready to start a new call.');
 
-    // Adjust button states
     startCallButton.disabled = false;
     hangUpButton.disabled = true;
     resetButton.disabled = false;
-
-    // Notify the server and other peers
-    socket.emit('hangUp');
 });
 
-// Handle the "Reset" button
+// Reset UI and reinitialize
 resetButton.addEventListener('click', reset);
 
-// Initialize media and set up UI on page load
+// Initialize the app on page load
 init();
