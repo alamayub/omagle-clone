@@ -103,30 +103,45 @@ const reset = async () => {
 
 // Handle receiving an offer
 socket.on('offer', async (offer) => {
-    createPeerConnection();
-    await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+    if (!peerConnection) {
+        console.warn('Received offer, but peerConnection is null.');
+        return; // Ignore the event if there's no active peer connection
+    }
+    try {
+        await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
 
-    const answer = await peerConnection.createAnswer();
-    await peerConnection.setLocalDescription(answer);
+        const answer = await peerConnection.createAnswer();
+        await peerConnection.setLocalDescription(answer);
 
-    socket.emit('answer', answer);
-    setStatus('Partner found! Connecting...');
-    hangUpButton.disabled = false;
-    startCallButton.disabled = true;
+        socket.emit('answer', answer);
+        setStatus('Partner found! Connecting...');
+        hangUpButton.disabled = false;
+        startCallButton.disabled = true;
+    } catch (error) {
+        console.error('Error handling offer:', error);
+    }
 });
 
 // Handle receiving an answer
-socket.on('answer', (answer) => {
-    peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
-    setStatus('Connected! You can now chat.');
-    hangUpButton.disabled = false;
-    startCallButton.disabled = true;
+socket.on('answer', async (answer) => {
+    if (!peerConnection) {
+        console.warn('Received answer, but peerConnection is null.');
+        return; // Ignore the event if there's no active peer connection
+    }
+    try {
+        await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+        setStatus('Connected! You can now chat.');
+    } catch (error) {
+        console.error('Error handling answer:', error);
+    }
 });
 
 // Handle receiving an ICE candidate
 socket.on('candidate', (candidate) => {
     if (peerConnection) {
-        peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+        peerConnection.addIceCandidate(new RTCIceCandidate(candidate)).catch((err) => {
+            console.warn('Failed to add ICE candidate:', err);
+        });
     } else {
         console.warn('Received ICE candidate, but peerConnection is null.');
     }
@@ -148,8 +163,10 @@ startCallButton.addEventListener('click', async () => {
     socket.emit('offer', offer);
 
     // Reattach event listeners
-    socket.on('answer', (answer) => {
-        peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+    socket.on('answer', async (answer) => {
+        if (peerConnection) {
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+        }
     });
 
     socket.on('candidate', (candidate) => {
