@@ -9,11 +9,19 @@
 </head>
 
 <body>
-    <video id="localVideo" autoplay muted></video>
-    <video id="remoteVideo" autoplay></video>
-    <div id="buttons">
-        <button id="startCall">Start Call</button>
+    <div class="container">
+        <video id="localVideo" autoplay muted></video>
+        <video id="remoteVideo" autoplay></video>
+    
+        <div>
+            <button id="startCall">Start Call</button>
+            <button id="hangUp" disabled>Hang Up</button>
+            <button id="reset" disabled>Reset</button>
+        </div>
+    
+        <div id="status" class="status">Ready to start a call.</div>
     </div>
+    
     <script src="/socket.io/socket.io.js"></script>
     <script src="script.js"></script>
 </body>
