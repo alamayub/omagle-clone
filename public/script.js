@@ -51,7 +51,7 @@ const createPeerConnection = () => {
 const hangUp = () => {
     if (peerConnection) {
         peerConnection.close(); // Close WebRTC connection
-        peerConnection = null;  // Ensure it's set to null after close
+        peerConnection = null;
     }
 
     if (localStream) {
@@ -103,45 +103,42 @@ const reset = async () => {
 
 // Handle receiving an offer
 socket.on('offer', async (offer) => {
-    if (!peerConnection) {
-        console.warn('Received offer, but peerConnection is null.');
-        return; // Ignore the event if there's no active peer connection
-    }
-    try {
-        await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+    createPeerConnection();
+    await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
 
-        const answer = await peerConnection.createAnswer();
-        await peerConnection.setLocalDescription(answer);
+    const answer = await peerConnection.createAnswer();
+    await peerConnection.setLocalDescription(answer);
 
-        socket.emit('answer', answer);
-        setStatus('Partner found! Connecting...');
-        hangUpButton.disabled = false;
-        startCallButton.disabled = true;
-    } catch (error) {
-        console.error('Error handling offer:', error);
-    }
+    socket.emit('answer', answer);
+    setStatus('Partner found! Connecting...');
+    hangUpButton.disabled = false;
+    startCallButton.disabled = true;
 });
 
 // Handle receiving an answer
-socket.on('answer', async (answer) => {
-    if (!peerConnection) {
-        console.warn('Received answer, but peerConnection is null.');
-        return; // Ignore the event if there's no active peer connection
-    }
-    try {
-        await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+socket.on('answer', (answer) => {
+    // Ensure we set remote description before adding candidate
+    if (peerConnection && answer) {
+        peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
         setStatus('Connected! You can now chat.');
-    } catch (error) {
-        console.error('Error handling answer:', error);
     }
+    hangUpButton.disabled = false;
+    startCallButton.disabled = true;
 });
 
 // Handle receiving an ICE candidate
 socket.on('candidate', (candidate) => {
     if (peerConnection) {
-        peerConnection.addIceCandidate(new RTCIceCandidate(candidate)).catch((err) => {
-            console.warn('Failed to add ICE candidate:', err);
-        });
+        // Only add candidate if the remote description is set
+        if (peerConnection.remoteDescription) {
+            peerConnection.addIceCandidate(new RTCIceCandidate(candidate)).catch((err) => {
+                console.warn('Failed to add ICE candidate:', err);
+            });
+        } else {
+            // Store the candidate to add later if remote description isn't set yet
+            console.log('ICE candidate received before remote description, saving...');
+            peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+        }
     } else {
         console.warn('Received ICE candidate, but peerConnection is null.');
     }
@@ -155,12 +152,6 @@ socket.on('hangUp', () => {
 
 // Start Call Button
 startCallButton.addEventListener('click', async () => {
-    // Properly recreate peer connection here before each new call
-    if (peerConnection) {
-        peerConnection.close();
-        peerConnection = null; // Ensure we clean up the previous peerConnection
-    }
-
     createPeerConnection();
 
     const offer = await peerConnection.createOffer();
@@ -169,10 +160,8 @@ startCallButton.addEventListener('click', async () => {
     socket.emit('offer', offer);
 
     // Reattach event listeners
-    socket.on('answer', async (answer) => {
-        if (peerConnection) {
-            await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
-        }
+    socket.on('answer', (answer) => {
+        peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
     });
 
     socket.on('candidate', (candidate) => {
