@@ -51,7 +51,7 @@ const createPeerConnection = () => {
 const hangUp = () => {
     if (peerConnection) {
         peerConnection.close(); // Close WebRTC connection
-        peerConnection = null;
+        peerConnection = null;  // Ensure it's set to null after close
     }
 
     if (localStream) {
@@ -155,6 +155,12 @@ socket.on('hangUp', () => {
 
 // Start Call Button
 startCallButton.addEventListener('click', async () => {
+    // Properly recreate peer connection here before each new call
+    if (peerConnection) {
+        peerConnection.close();
+        peerConnection = null; // Ensure we clean up the previous peerConnection
+    }
+
     createPeerConnection();
 
     const offer = await peerConnection.createOffer();
