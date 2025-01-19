@@ -4,6 +4,7 @@ const remoteVideo = document.getElementById('remoteVideo');
 const startCallButton = document.getElementById('startCall');
 const hangUpButton = document.getElementById('hangUp');
 const resetButton = document.getElementById('reset');
+const statusElement = document.getElementById('status');
 
 let localStream; // To store the local video/audio stream
 let peerConnection; // To handle WebRTC peer-to-peer connection
@@ -12,13 +13,19 @@ const servers = {
     iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
 };
 
+const setStatus = (message) => {
+    statusElement.textContent = message;
+};
+
 // Initialize local media (camera and microphone)
 const init = async () => {
     try {
         localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
         localVideo.srcObject = localStream;
+        setStatus('Ready to start a call.');
     } catch (error) {
         console.error('Error accessing media devices:', error);
+        setStatus('Failed to access camera/microphone. Check permissions.');
     }
 };
 
@@ -51,20 +58,47 @@ const hangUp = () => {
         localStream.getTracks().forEach((track) => track.stop()); // Stop media streams
     }
 
+    setStatus('Call ended. You can reset to try again.');
     remoteVideo.srcObject = null;
     hangUpButton.disabled = true;
     startCallButton.disabled = false;
     resetButton.disabled = false;
-
+    
     socket.emit('hangUp'); // Notify the other user
 };
 
 // Reset: Reinitialize the media and clear the remote video
 const reset = async () => {
-    await init(); // Reinitialize local media
+    // Stop local media streams
+    if (localStream) {
+        localStream.getTracks().forEach((track) => track.stop());
+        localStream = null;
+    }
+
+    // Reset video elements
+    localVideo.srcObject = null;
     remoteVideo.srcObject = null;
+
+    // Close and nullify the peerConnection
+    if (peerConnection) {
+        peerConnection.close();
+        peerConnection = null;
+    }
+
+    // Unsubscribe from signaling events
+    socket.off('offer');
+    socket.off('answer');
+    socket.off('candidate');
+    socket.off('hangUp');
+
+    // Reinitialize media
+    await init();
+    setStatus('Click "Start Call" to begin.');
+
+    // Reset button states
     resetButton.disabled = true;
     startCallButton.disabled = false;
+    hangUpButton.disabled = true;
 };
 
 // Handle receiving an offer
@@ -76,7 +110,7 @@ socket.on('offer', async (offer) => {
     await peerConnection.setLocalDescription(answer);
 
     socket.emit('answer', answer);
-
+    setStatus('Partner found! Connecting...');
     hangUpButton.disabled = false;
     startCallButton.disabled = true;
 });
@@ -84,18 +118,24 @@ socket.on('offer', async (offer) => {
 // Handle receiving an answer
 socket.on('answer', (answer) => {
     peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+    setStatus('Connected! You can now chat.');
     hangUpButton.disabled = false;
     startCallButton.disabled = true;
 });
 
 // Handle receiving an ICE candidate
 socket.on('candidate', (candidate) => {
-    peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+    if (peerConnection) {
+        peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+    } else {
+        console.warn('Received ICE candidate, but peerConnection is null.');
+    }
 });
 
 // Handle receiving a "hangUp" message
 socket.on('hangUp', () => {
     hangUp(); // Execute hang up logic when the other user disconnects
+    setStatus('Partner disconnected. Reset to start again.');
 });
 
 // Start Call Button
@@ -107,6 +147,22 @@ startCallButton.addEventListener('click', async () => {
 
     socket.emit('offer', offer);
 
+    // Reattach event listeners
+    socket.on('answer', (answer) => {
+        peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+    });
+
+    socket.on('candidate', (candidate) => {
+        if (peerConnection) {
+            peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+        }
+    });
+
+    socket.on('hangUp', () => {
+        hangUp();
+    });
+
+    setStatus('Looking for a partner...');
     startCallButton.disabled = true;
     hangUpButton.disabled = false;
     resetButton.disabled = true;
